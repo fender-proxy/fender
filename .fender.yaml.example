@@ -1,0 +1,44 @@
+# fender configuration
+# Place this file at ~/.fender/config.yaml
+# All values are optional — built-in defaults are shown.
+
+# ── Sockets ─────────────────────────────────────────────────────────────────
+
+# Unix socket fender listens on.
+# Override: --listen flag or FENDER_LISTEN env var
+listen: "~/.fender/fender.sock"
+
+# Upstream Docker daemon socket.
+# Override: --upstream flag or FENDER_UPSTREAM env var
+upstream: "/var/run/docker.sock"
+
+# ── Registry rules ───────────────────────────────────────────────────────────
+
+# Prepend this registry to every image that has no explicit registry.
+# e.g. nginx:latest     → registry.example.com/nginx:latest
+#      myorg/app:v1     → registry.example.com/myorg/app:v1
+#      ghcr.io/org/app  → unchanged (has explicit registry)
+#
+# Override: --default-registry flag or FENDER_DEFAULT_REGISTRY env var
+default_registry: ""
+
+# Per-registry rewrite map.  Source registry → target registry.
+# Applied after default_registry resolution.
+#
+# Common use-cases:
+#   • Route all docker.io traffic through a pull-through cache
+#   • Redirect ghcr.io to an internal mirror
+#
+# Note: for unqualified images (no explicit registry), "docker.io" is the
+#       implicit source registry Docker would normally use.
+#
+# Examples:
+registry_map:
+  # docker.io: nexus.example.com/dockerhub-proxy
+  # ghcr.io:   nexus.example.com/ghcr-proxy
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+
+# Log verbosity: debug | info | warn | error
+# Override: --log-level flag or FENDER_LOG_LEVEL env var
+log_level: "info"

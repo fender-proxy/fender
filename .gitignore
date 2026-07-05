@@ -1,0 +1,13 @@
+# Build output
+/bin/
+
+# Go test cache
+*.test
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
