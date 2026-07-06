@@ -35,6 +35,16 @@ inputs:
     required: false
     default: ''
 
+  auths:
+    description: >
+      Registry authentication credentials, as one or more registry lines in YAML format.
+      Example:
+        registry.example.com:
+          username: ${{ secrets.REG_USER }}
+          password: ${{ secrets.REG_PWD }}
+    required: false
+    default: ''
+
   log-level:
     description: 'Log verbosity: debug | info | warn | error'
     required: false
@@ -99,6 +109,7 @@ runs:
       env:
         DEFAULT_REGISTRY: ${{ inputs.default-registry }}
         REGISTRY_MAP:     ${{ inputs.registry-map }}
+        AUTHS:            ${{ inputs.auths }}
         LOG_LEVEL:        ${{ inputs.log-level }}
       run: |
         set -euo pipefail
@@ -109,7 +120,15 @@ runs:
         : > "$CONFIG"
 
         if [ -n "$DEFAULT_REGISTRY" ]; then
-          printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+          if [[ "$DEFAULT_REGISTRY" == *$'\n'* ]] || [[ "$DEFAULT_REGISTRY" == *":"* ]]; then
+            echo 'default_registry:' >> "$CONFIG"
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              printf '  %s\n' "$line" >> "$CONFIG"
+            done <<< "$DEFAULT_REGISTRY"
+          else
+            printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+          fi
         fi
 
         if [ -n "$REGISTRY_MAP" ]; then
@@ -118,6 +137,14 @@ runs:
             [ -z "$line" ] && continue
             printf '  %s\n' "$line" >> "$CONFIG"
           done <<< "$REGISTRY_MAP"
+        fi
+
+        if [ -n "$AUTHS" ]; then
+          echo 'auths:' >> "$CONFIG"
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            printf '  %s\n' "$line" >> "$CONFIG"
+          done <<< "$AUTHS"
         fi
 
         printf 'log_level: "%s"\n' "$LOG_LEVEL" >> "$CONFIG"

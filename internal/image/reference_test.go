@@ -164,3 +164,39 @@ func TestRewrite(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRegistryHost(t *testing.T) {
+	tests := []struct {
+		ref  string
+		want string
+	}{
+		{"", "docker.io"},
+		{"nginx", "docker.io"},
+		{"nginx:latest", "docker.io"},
+		{"myorg/app", "docker.io"},
+		{"myorg/app:v1", "docker.io"},
+		{"docker.io/library/nginx", "docker.io"},
+		{"registry.example.com", "registry.example.com"},
+		{"registry.example.com/library/nginx", "registry.example.com"},
+		{"https://registry.example.com", "registry.example.com"},
+		{"http://registry.example.com/prefix/img", "registry.example.com"},
+		{"localhost", "localhost"},
+		{"localhost:5000", "localhost:5000"},
+		{"localhost:5000/app", "localhost:5000"},
+		{"https://localhost:5000/app", "localhost:5000"},
+		{"my.registry.com:5000/org/app", "my.registry.com:5000"},
+		{"nexus.corp/dockerhub-proxy", "nexus.corp"},
+		{"index.docker.io", "index.docker.io"},
+		{"https://index.docker.io/v1/", "index.docker.io"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ref, func(t *testing.T) {
+			got := image.GetRegistryHost(tt.ref)
+			if got != tt.want {
+				t.Errorf("GetRegistryHost(%q) = %q, want %q", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+

@@ -46,6 +46,7 @@ context automatically.
 | `version` | fender release tag | `latest` |
 | `default-registry` | Registry for unqualified images | — |
 | `registry-map` | Newline-separated `source: target` remappings | — |
+| `auths` | Newline-separated registry credentials | — |
 | `log-level` | `debug\|info\|warn\|error` | `info` |
 
 ### Outputs
@@ -90,6 +91,7 @@ build:
 | `version` | fender release tag | `latest` |
 | `default-registry` | Registry for unqualified images | — |
 | `registry-map` | Newline-separated `source: target` remappings | — |
+| `auths` | Newline-separated registry credentials | — |
 | `log-level` | `debug\|info\|warn\|error` | `info` |
 
 ---
@@ -209,6 +211,12 @@ registry_map:
   # docker.io: nexus.corp/dockerhub-proxy
   # ghcr.io:   nexus.corp/ghcr-proxy
 
+# Standalone registry authentication details (optional).
+auths:
+  # registry.example.com:
+  #   username: "user"
+  #   password: "password"
+
 # debug | info | warn | error
 log_level: "info"
 ```
@@ -220,10 +228,75 @@ log_level: "info"
 | `--listen` | `FENDER_LISTEN` | `~/.fender/fender.sock` |
 | `--upstream` | `FENDER_UPSTREAM` | _(auto-detected from Docker context)_ |
 | `--default-registry` | `FENDER_DEFAULT_REGISTRY` | _(none)_ |
+| `--default-registry-username` | `FENDER_DEFAULT_REGISTRY_USERNAME` | _(none)_ |
+| `--default-registry-password` | `FENDER_DEFAULT_REGISTRY_PASSWORD` | _(none)_ |
+| `--default-registry-token` | `FENDER_DEFAULT_REGISTRY_TOKEN` | _(none)_ |
+| `--default-registry-email` | `FENDER_DEFAULT_REGISTRY_EMAIL` | _(none)_ |
+| `--registry-auth` | `FENDER_REGISTRY_AUTHS` | _(none)_ |
 | `--log-level` | `FENDER_LOG_LEVEL` | `info` |
 | `--config` | — | `~/.fender/config.yaml` |
 
 > Setting `--upstream` explicitly disables context auto-detection and context watching.
+
+---
+
+## Registry Authentication
+
+When images are rewritten to a different registry, they may require authentication credentials. `fender` automatically intercepts these calls and replaces/injects the `X-Registry-Auth` header with credentials matching the destination registry host.
+
+You can configure authentication credentials in three ways:
+
+### 1. Standalone Auths block (Recommended)
+Add an `auths` block in your `config.yaml` file:
+
+```yaml
+auths:
+  registry.example.com:
+    username: myuser
+    password: mypassword
+```
+
+### 2. Inline Registry Credentials
+You can define credentials inline inside `default_registry` or `registry_map` mappings:
+
+```yaml
+default_registry:
+  name: registry.example.com
+  username: myuser
+  password: mypassword
+
+registry_map:
+  ghcr.io:
+    name: nexus.corp/ghcr-proxy
+    username: myuser
+    password: mypassword
+```
+
+### 3. CI/CD Integrations
+Pass credentials using CI secrets in your GitHub Actions workflow or GitLab CI pipeline:
+
+**GitHub Actions:**
+```yaml
+- uses: fender-proxy/fender@v1
+  with:
+    default-registry: registry.example.com
+    auths: |
+      registry.example.com:
+        username: ${{ secrets.REG_USER }}
+        password: ${{ secrets.REG_PWD }}
+```
+
+**GitLab CI:**
+```yaml
+include:
+  - component: gitlab.com/fender-proxy/fender/fender@~latest
+    inputs:
+      default-registry: registry.example.com
+      auths: |
+        registry.example.com:
+          username: $REG_USER
+          password: $REG_PASSWORD
+```
 
 ---
 
