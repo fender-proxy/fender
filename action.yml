@@ -1,8 +1,8 @@
-name: 'fender'
+name: 'fender-ci'
 description: >
   Transparent Docker registry proxy. Rewrites unqualified image references
-  (nginx, myorg/app) to your registry — solving Docker Hub rate limits in CI
-  with a single action step.
+  to your registry — solving Docker Hub rate limits in CI with a single 
+  action step.
 
 author: 'fender-proxy'
 
