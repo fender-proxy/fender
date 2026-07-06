@@ -73,12 +73,17 @@ type Config struct {
 
 
 // Overrides holds values sourced from CLI flags.
-// An empty string means the flag was not provided.
+// An empty string/slice means the flag was not provided.
 type Overrides struct {
-	Listen          string
-	Upstream        string
-	DefaultRegistry string
-	LogLevel        string
+	Listen                  string
+	Upstream                string
+	DefaultRegistry         string
+	DefaultRegistryUsername string
+	DefaultRegistryPassword string
+	DefaultRegistryToken    string
+	DefaultRegistryEmail    string
+	RegistryAuths           []string
+	LogLevel                string
 }
 
 // defaults returns built-in default configuration.
@@ -157,7 +162,22 @@ func applyEnv(cfg *Config) {
 		cfg.Upstream = v
 	}
 	if v := os.Getenv("FENDER_DEFAULT_REGISTRY"); v != "" {
-		cfg.DefaultRegistry = RegistryConfig{Name: v}
+		cfg.DefaultRegistry.Name = v
+	}
+	if v := os.Getenv("FENDER_DEFAULT_REGISTRY_USERNAME"); v != "" {
+		cfg.DefaultRegistry.Username = v
+	}
+	if v := os.Getenv("FENDER_DEFAULT_REGISTRY_PASSWORD"); v != "" {
+		cfg.DefaultRegistry.Password = v
+	}
+	if v := os.Getenv("FENDER_DEFAULT_REGISTRY_TOKEN"); v != "" {
+		cfg.DefaultRegistry.IdentityToken = v
+	}
+	if v := os.Getenv("FENDER_DEFAULT_REGISTRY_EMAIL"); v != "" {
+		cfg.DefaultRegistry.Email = v
+	}
+	if v := os.Getenv("FENDER_REGISTRY_AUTHS"); v != "" {
+		cfg.parseRegistryAuths(strings.Split(v, ","))
 	}
 	if v := os.Getenv("FENDER_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
@@ -173,12 +193,54 @@ func applyOverrides(cfg *Config, o Overrides) {
 		cfg.Upstream = o.Upstream
 	}
 	if o.DefaultRegistry != "" {
-		cfg.DefaultRegistry = RegistryConfig{Name: o.DefaultRegistry}
+		cfg.DefaultRegistry.Name = o.DefaultRegistry
+	}
+	if o.DefaultRegistryUsername != "" {
+		cfg.DefaultRegistry.Username = o.DefaultRegistryUsername
+	}
+	if o.DefaultRegistryPassword != "" {
+		cfg.DefaultRegistry.Password = o.DefaultRegistryPassword
+	}
+	if o.DefaultRegistryToken != "" {
+		cfg.DefaultRegistry.IdentityToken = o.DefaultRegistryToken
+	}
+	if o.DefaultRegistryEmail != "" {
+		cfg.DefaultRegistry.Email = o.DefaultRegistryEmail
+	}
+	if len(o.RegistryAuths) > 0 {
+		cfg.parseRegistryAuths(o.RegistryAuths)
 	}
 	if o.LogLevel != "" {
 		cfg.LogLevel = o.LogLevel
 	}
 }
+
+// parseRegistryAuths parses slice of registry credentials formatted as host:username:password
+func (cfg *Config) parseRegistryAuths(auths []string) {
+	if cfg.Auths == nil {
+		cfg.Auths = make(map[string]AuthConfig)
+	}
+	for _, val := range auths {
+		val = strings.TrimSpace(val)
+		if val == "" {
+			continue
+		}
+		parts := strings.SplitN(val, ":", 3)
+		if len(parts) >= 2 {
+			host := parts[0]
+			username := parts[1]
+			password := ""
+			if len(parts) == 3 {
+				password = parts[2]
+			}
+			auth := cfg.Auths[host]
+			auth.Username = username
+			auth.Password = password
+			cfg.Auths[host] = auth
+		}
+	}
+}
+
 
 // buildRegistryAuths compiles all defined auth configurations into a single lookup map.
 func (c *Config) buildRegistryAuths() {

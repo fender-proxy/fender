@@ -228,6 +228,11 @@ log_level: "info"
 | `--listen` | `FENDER_LISTEN` | `~/.fender/fender.sock` |
 | `--upstream` | `FENDER_UPSTREAM` | _(auto-detected from Docker context)_ |
 | `--default-registry` | `FENDER_DEFAULT_REGISTRY` | _(none)_ |
+| `--default-registry-username` | `FENDER_DEFAULT_REGISTRY_USERNAME` | _(none)_ |
+| `--default-registry-password` | `FENDER_DEFAULT_REGISTRY_PASSWORD` | _(none)_ |
+| `--default-registry-token` | `FENDER_DEFAULT_REGISTRY_TOKEN` | _(none)_ |
+| `--default-registry-email` | `FENDER_DEFAULT_REGISTRY_EMAIL` | _(none)_ |
+| `--registry-auth` | `FENDER_REGISTRY_AUTHS` | _(none)_ |
 | `--log-level` | `FENDER_LOG_LEVEL` | `info` |
 | `--config` | — | `~/.fender/config.yaml` |
 

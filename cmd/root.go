@@ -28,11 +28,16 @@ func Execute() {
 
 func newRootCmd() *cobra.Command {
 	var (
-		cfgFile      string
-		flagListen   string
-		flagUpstream string
-		flagDefReg   string
-		flagLogLevel string
+		cfgFile                 string
+		flagListen              string
+		flagUpstream            string
+		flagDefReg              string
+		flagDefRegUser          string
+		flagDefRegPass          string
+		flagDefRegToken         string
+		flagDefRegEmail         string
+		flagRegistryAuths       []string
+		flagLogLevel            string
 	)
 
 	cmd := &cobra.Command{
@@ -58,10 +63,15 @@ through fender with no manual DOCKER_HOST configuration required.`,
 		Version: appVersion,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return run(cfgFile, config.Overrides{
-				Listen:          flagListen,
-				Upstream:        flagUpstream,
-				DefaultRegistry: flagDefReg,
-				LogLevel:        flagLogLevel,
+				Listen:                  flagListen,
+				Upstream:                flagUpstream,
+				DefaultRegistry:         flagDefReg,
+				DefaultRegistryUsername: flagDefRegUser,
+				DefaultRegistryPassword: flagDefRegPass,
+				DefaultRegistryToken:    flagDefRegToken,
+				DefaultRegistryEmail:    flagDefRegEmail,
+				RegistryAuths:           flagRegistryAuths,
+				LogLevel:                flagLogLevel,
 			})
 		},
 	}
@@ -71,6 +81,11 @@ through fender with no manual DOCKER_HOST configuration required.`,
 	f.StringVar(&flagListen, "listen", "", "socket fender listens on (default: ~/.fender/fender.sock)\n  env: FENDER_LISTEN")
 	f.StringVar(&flagUpstream, "upstream", "", "upstream Docker socket (default: auto-detected from active Docker context)\n  env: FENDER_UPSTREAM")
 	f.StringVar(&flagDefReg, "default-registry", "", "registry for images with no explicit registry\n  env: FENDER_DEFAULT_REGISTRY")
+	f.StringVar(&flagDefRegUser, "default-registry-username", "", "username for default registry authentication\n  env: FENDER_DEFAULT_REGISTRY_USERNAME")
+	f.StringVar(&flagDefRegPass, "default-registry-password", "", "password for default registry authentication\n  env: FENDER_DEFAULT_REGISTRY_PASSWORD")
+	f.StringVar(&flagDefRegToken, "default-registry-token", "", "token for default registry authentication\n  env: FENDER_DEFAULT_REGISTRY_TOKEN")
+	f.StringVar(&flagDefRegEmail, "default-registry-email", "", "email for default registry authentication\n  env: FENDER_DEFAULT_REGISTRY_EMAIL")
+	f.StringSliceVar(&flagRegistryAuths, "registry-auth", nil, "registry credentials in host:username:password format (can be specified multiple times)\n  env: FENDER_REGISTRY_AUTHS (comma-separated)")
 	f.StringVar(&flagLogLevel, "log-level", "", "log verbosity: debug|info|warn|error (default: info)\n  env: FENDER_LOG_LEVEL")
 
 	return cmd
