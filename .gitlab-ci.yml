@@ -5,46 +5,30 @@ stages:
   - validate
   - release
 
+include:
+  - local: templates/fender/template.yml
+    inputs:
+      default-registry: "registry.fender-ci-test.invalid"
+      log-level: "debug"
+
 # ── Component self-test ────────────────────────────────────────────────────
 # Validates that the component template works correctly.
 # Runs on MR and pushes to the default branch.
 validate-component:
   stage: validate
-  image: docker:latest
+  extends: .fender
+  image:
+    name: docker:latest
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl bash && exec /device-entrypoint.sh || exec /bin/sh"]
   services:
     - docker:dind
   variables:
     DOCKER_TLS_CERTDIR: ""
-  before_script:
-    - apk add --no-cache curl bash
-    - |
-      set -euo pipefail
-
-      # Install the latest fender binary
-      VERSION=$(curl -fsSL https://api.github.com/repos/fender-proxy/fender/releases/latest \
-        | grep '"tag_name"' | cut -d'"' -f4)
-      OS=linux
-      ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
-      curl -fsSL \
-        "https://github.com/fender-proxy/fender/releases/download/${VERSION}/fender_${OS}_${ARCH}.tar.gz" \
-        | tar -xz -C /usr/local/bin fender
-      chmod +x /usr/local/bin/fender
-
-      mkdir -p "$HOME/.fender"
-      printf 'default_registry: "registry.fender-ci-test.invalid"\nlog_level: "debug"\n' \
-        > "$HOME/.fender/config.yaml"
-
-      nohup fender > /tmp/fender.log 2>&1 &
-      for i in $(seq 1 20); do
-        [ -S "$HOME/.fender/fender.sock" ] && break
-        [ "$i" -eq 20 ] && { echo "fender failed to start"; cat /tmp/fender.log; exit 1; }
-        sleep 0.5
-      done
-      export DOCKER_HOST="unix://$HOME/.fender/fender.sock"
   script:
     - docker pull hello-world 2>/dev/null || true
     - sleep 0.5
     - |
+      # Check fender log to confirm the rewrite occurred
       if grep -q "registry.fender-ci-test.invalid" /tmp/fender.log; then
         echo "✓ image reference rewritten by fender"
       else

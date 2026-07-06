@@ -48,21 +48,15 @@ spec:
 # It installs and starts fender in before_script so that all docker commands
 # in your job's script: section are transparently proxied.
 #
-# Because GitLab CI runners don't persist Docker context state between
-# pipeline stages (each job gets a fresh environment), this component
-# exports DOCKER_HOST so it works reliably regardless of context support.
+# Because GitLab CI runners don't persist Docker context state between jobs,
+# this component exports DOCKER_HOST so it works reliably on any runner.
 .fender:
-  variables:
-    # Overridden in before_script once fender is running.
-    DOCKER_HOST: ''
-    FENDER_SOCKET: ''
-
   before_script:
     - |
       set -euo pipefail
 
       #── Resolve version ────────────────────────────────────────────────────
-      FENDER_VERSION="${{ inputs.version }}"
+      FENDER_VERSION="$[[ inputs.version ]]"
       if [ "$FENDER_VERSION" = "latest" ]; then
         FENDER_VERSION=$(curl -fsSL \
           "https://api.github.com/repos/fender-proxy/fender/releases/latest" \
@@ -93,12 +87,12 @@ spec:
       CONFIG="$HOME/.fender/config.yaml"
       : > "$CONFIG"
 
-      DEFAULT_REGISTRY="${{ inputs.default-registry }}"
+      DEFAULT_REGISTRY="$[[ inputs.default-registry ]]"
       if [ -n "$DEFAULT_REGISTRY" ]; then
         printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
       fi
 
-      REGISTRY_MAP="${{ inputs.registry-map }}"
+      REGISTRY_MAP="$[[ inputs.registry-map ]]"
       if [ -n "$REGISTRY_MAP" ]; then
         echo 'registry_map:' >> "$CONFIG"
         while IFS= read -r line; do
@@ -107,7 +101,7 @@ spec:
         done <<< "$REGISTRY_MAP"
       fi
 
-      printf 'log_level: "%s"\n' "${{ inputs.log-level }}" >> "$CONFIG"
+      printf 'log_level: "%s"\n' "$[[ inputs.log-level ]]" >> "$CONFIG"
 
       #── Start fender ───────────────────────────────────────────────────────
       FENDER_SOCK="$HOME/.fender/fender.sock"
@@ -131,6 +125,3 @@ spec:
       # explicitly rather than relying on Docker context persistence.
       export DOCKER_HOST="unix://$FENDER_SOCK"
       export FENDER_SOCKET="$FENDER_SOCK"
-
-      # Propagate to subsequent script lines in this job.
-      echo "DOCKER_HOST=unix://$FENDER_SOCK" >> /etc/environment 2>/dev/null || true
