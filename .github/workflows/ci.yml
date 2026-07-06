@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Unit tests ─────────────────────────────────────────────────────────────
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+  # ── Build (verify cross-compilation) ──────────────────────────────────────
+  build:
+    name: Build (${{ matrix.os }}/${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os:   [linux, darwin]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o /dev/null .
+
+  # ── Action integration test ────────────────────────────────────────────────
+  # Builds fender from source and runs through the same logic as action.yml
+  # (skipping the download step). Verifies that:
+  #   1. The "fender" Docker context is registered and active.
+  #   2. An image pull is intercepted and rewritten in the fender log.
+  action-test:
+    name: Action integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build fender from source
+        run: |
+          go build -o "$RUNNER_TEMP/fender" .
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Write fender config
+        run: |
+          mkdir -p "$HOME/.fender"
+          cat > "$HOME/.fender/config.yaml" <<'EOF'
+          default_registry: "registry.fender-ci-test.invalid"
+          log_level: "debug"
+          EOF
+
+      - name: Start fender
+        run: |
+          nohup fender > "$RUNNER_TEMP/fender.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/fender.pid"
+
+          for i in $(seq 1 20); do
+            [ -S "$HOME/.fender/fender.sock" ] && break
+            [ "$i" -eq 20 ] && {
+              echo "fender failed to start within 10 s"
+              cat "$RUNNER_TEMP/fender.log"
+              exit 1
+            }
+            sleep 0.5
+          done
+          sleep 0.2   # let context registration finish
+          echo "fender pid=$(cat $RUNNER_TEMP/fender.pid) — ready"
+
+      - name: Verify Docker context registered
+        run: |
+          echo "=== docker context ls ==="
+          docker context ls
+
+          echo "=== docker context inspect fender ==="
+          docker context inspect fender
+
+          ACTIVE=$(docker context show)
+          if [ "$ACTIVE" != "fender" ]; then
+            echo "Expected active context to be 'fender', got '$ACTIVE'"
+            exit 1
+          fi
+          echo "✓ active context is 'fender'"
+
+      - name: Pull image and verify rewrite
+        run: |
+          # The pull will fail — registry.fender-ci-test.invalid doesn't exist.
+          # What we care about is that fender rewrote the reference before
+          # forwarding, which we can confirm from the debug log.
+          docker pull hello-world 2>/dev/null || true
+          sleep 0.5
+
+          echo "=== fender log ==="
+          cat "$RUNNER_TEMP/fender.log"
+
+          if grep -q "registry.fender-ci-test.invalid" "$RUNNER_TEMP/fender.log"; then
+            echo "✓ image reference was rewritten by fender"
+          else
+            echo "✗ expected rewrite not found in fender log"
+            exit 1
+          fi
+
+      - name: Verify context restored on shutdown
+        run: |
+          PREV=$(docker context inspect fender \
+            --format '{{ index .Metadata "PreviousContext" }}' 2>/dev/null || echo "default")
+
+          kill "$(cat "$RUNNER_TEMP/fender.pid")" 2>/dev/null || true
+          sleep 1
+
+          ACTIVE=$(docker context show)
+          echo "Active context after fender shutdown: $ACTIVE"
+          echo "Expected: $PREV"
+
+          if [ "$ACTIVE" = "$PREV" ] || [ "$ACTIVE" = "default" ]; then
+            echo "✓ previous context restored"
+          else
+            echo "✗ context was not restored (got '$ACTIVE')"
+            exit 1
+          fi
+
+      - name: Upload fender log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fender-log
+          path: ${{ runner.temp }}/fender.log

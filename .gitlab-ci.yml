@@ -1,0 +1,34 @@
+# This file is required for GitLab CI Catalog publication.
+# See: https://docs.gitlab.com/ee/ci/components/
+
+# Component validation — runs on MR and pushes to main.
+include:
+  - component: $CI_SERVER_FQDN/fender-proxy/fender/fender@$CI_COMMIT_SHA
+    inputs:
+      default-registry: "registry.fender-ci-test.invalid"
+      log-level: "debug"
+
+stages:
+  - validate
+
+validate-component:
+  stage: validate
+  extends: .fender
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker pull hello-world 2>/dev/null || true
+    - |
+      if grep -q "registry.fender-ci-test.invalid" /tmp/fender.log; then
+        echo "✓ image reference rewritten"
+      else
+        echo "✗ expected rewrite not found in log"
+        cat /tmp/fender.log
+        exit 1
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

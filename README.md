@@ -21,7 +21,74 @@ docker pull nginx:latest       # you type this
 
 ---
 
-## Install
+## GitHub Actions
+
+```yaml
+steps:
+  - uses: fender-proxy/fender@v1
+    with:
+      default-registry: registry.example.com
+
+  - run: docker pull nginx    # → registry.example.com/library/nginx
+```
+
+No `DOCKER_HOST` export needed — fender registers itself as the active Docker
+context automatically.
+
+### Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `version` | fender release tag | `latest` |
+| `default-registry` | Registry for unqualified images | — |
+| `registry-map` | Newline-separated `source: target` remappings | — |
+| `log-level` | `debug\|info\|warn\|error` | `info` |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `socket` | Absolute path to the fender Unix socket |
+| `version` | The fender version that was installed |
+
+### Example: private registry mirror
+
+```yaml
+- uses: fender-proxy/fender@v1
+  with:
+    registry-map: |
+      docker.io: nexus.corp/dockerhub-proxy
+      ghcr.io:   nexus.corp/ghcr-proxy
+```
+
+---
+
+## GitLab CI
+
+```yaml
+include:
+  - component: gitlab.com/fender-proxy/fender/fender@~latest
+    inputs:
+      default-registry: registry.example.com
+
+build:
+  extends: .fender
+  script:
+    - docker pull nginx    # → registry.example.com/library/nginx
+```
+
+`DOCKER_HOST` is automatically set in the job — no manual configuration needed.
+
+### Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `version` | fender release tag | `latest` |
+| `default-registry` | Registry for unqualified images | — |
+| `registry-map` | Newline-separated `source: target` remappings | — |
+| `log-level` | `debug\|info\|warn\|error` | `info` |
+
+---
 
 **Requires Go 1.21+**
 

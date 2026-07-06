@@ -1,0 +1,167 @@
+name: 'fender'
+description: >
+  Transparent Docker registry proxy. Rewrites unqualified image references
+  (nginx, myorg/app) to your registry — solving Docker Hub rate limits in CI
+  with a single action step.
+
+author: 'fender-proxy'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  version:
+    description: >
+      fender release tag to install (e.g. v0.2.0).
+      Defaults to the latest published release.
+    required: false
+    default: 'latest'
+
+  default-registry:
+    description: >
+      Registry to use for images with no explicit registry.
+      Example: registry.example.com
+      With this set, "docker pull nginx" pulls from "registry.example.com/library/nginx".
+    required: false
+    default: ''
+
+  registry-map:
+    description: >
+      Per-registry remapping rules, one per line in "source: target" format.
+      Takes effect after default-registry.
+      Example:
+        docker.io: nexus.corp/dockerhub-proxy
+        ghcr.io:   nexus.corp/ghcr-proxy
+    required: false
+    default: ''
+
+  log-level:
+    description: 'Log verbosity: debug | info | warn | error'
+    required: false
+    default: 'info'
+
+outputs:
+  socket:
+    description: 'Absolute path to the fender Unix socket.'
+    value: ${{ steps.start.outputs.socket }}
+
+  version:
+    description: 'The fender version that was installed.'
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+
+    # ── 1. Install ───────────────────────────────────────────────────────────
+    - name: Install fender
+      id: install
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64)        ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+          *)
+            echo "::error::fender: unsupported architecture: $ARCH"
+            exit 1
+            ;;
+        esac
+
+        if [ "$VERSION" = "latest" ]; then
+          VERSION=$(gh release view \
+            --repo fender-proxy/fender \
+            --json tagName \
+            --jq .tagName)
+        fi
+
+        ARCHIVE="fender_${OS}_${ARCH}.tar.gz"
+        URL="https://github.com/fender-proxy/fender/releases/download/${VERSION}/${ARCHIVE}"
+
+        echo "::group::Installing fender ${VERSION} (${OS}/${ARCH})"
+        curl -fsSL "$URL" | tar -xz -C "$RUNNER_TEMP" fender
+        chmod +x "$RUNNER_TEMP/fender"
+        echo "::endgroup::"
+
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    # ── 2. Configure ─────────────────────────────────────────────────────────
+    - name: Configure fender
+      id: configure
+      shell: bash
+      env:
+        DEFAULT_REGISTRY: ${{ inputs.default-registry }}
+        REGISTRY_MAP:     ${{ inputs.registry-map }}
+        LOG_LEVEL:        ${{ inputs.log-level }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.fender"
+        CONFIG="$HOME/.fender/config.yaml"
+
+        # Write config — only include keys that were provided.
+        : > "$CONFIG"
+
+        if [ -n "$DEFAULT_REGISTRY" ]; then
+          printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+        fi
+
+        if [ -n "$REGISTRY_MAP" ]; then
+          echo 'registry_map:' >> "$CONFIG"
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            printf '  %s\n' "$line" >> "$CONFIG"
+          done <<< "$REGISTRY_MAP"
+        fi
+
+        printf 'log_level: "%s"\n' "$LOG_LEVEL" >> "$CONFIG"
+
+        echo "::debug::fender config:"
+        cat "$CONFIG" >&2
+
+    # ── 3. Start ─────────────────────────────────────────────────────────────
+    - name: Start fender
+      id: start
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        SOCKET="$HOME/.fender/fender.sock"
+        LOG="$RUNNER_TEMP/fender.log"
+        PID_FILE="$RUNNER_TEMP/fender.pid"
+
+        nohup fender > "$LOG" 2>&1 &
+        echo $! > "$PID_FILE"
+
+        # Poll until the socket file appears (fender creates it on successful start).
+        # Context registration happens immediately after, so by the time the next
+        # step runs, "docker context use fender" has already been set.
+        echo "Waiting for fender to start…"
+        for i in $(seq 1 20); do
+          if [ -S "$SOCKET" ]; then
+            echo "✓ fender ready (pid=$(cat "$PID_FILE"), socket=$SOCKET)"
+            break
+          fi
+          if [ "$i" -eq 20 ]; then
+            echo "::error::fender did not start within 10 seconds"
+            echo "::group::fender startup log"
+            cat "$LOG" || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          sleep 0.5
+        done
+
+        # Give the context registration a moment to complete (it happens
+        # immediately after the socket is created, but asynchronously).
+        sleep 0.2
+
+        echo "socket=$SOCKET"           >> "$GITHUB_OUTPUT"
+        echo "FENDER_SOCKET=$SOCKET"    >> "$GITHUB_ENV"

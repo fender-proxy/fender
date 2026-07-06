@@ -1,0 +1,136 @@
+##############################################################################
+# fender GitLab CI Component
+#
+# Installs and starts fender as a background proxy that rewrites Docker image
+# references to your registry — solving Docker Hub rate limits in GitLab CI.
+#
+# Usage in your .gitlab-ci.yml:
+#
+#   include:
+#     - component: gitlab.com/fender-proxy/fender/fender@~latest
+#       inputs:
+#         default-registry: registry.example.com
+#
+#   build:
+#     extends: .fender
+#     script:
+#       - docker pull nginx   # → pulled from registry.example.com
+#
+##############################################################################
+
+spec:
+  inputs:
+    version:
+      default: 'latest'
+      description: >
+        fender release tag to install (e.g. v0.2.0).
+        'latest' resolves to the most recent GitHub release.
+
+    default-registry:
+      default: ''
+      description: >
+        Registry to use for images with no explicit registry.
+        Example: registry.example.com
+
+    registry-map:
+      default: ''
+      description: >
+        Newline-separated registry remapping rules in "source: target" format.
+        Example: "docker.io: nexus.corp/dockerhub-proxy\nghcr.io: nexus.corp/ghcr-proxy"
+
+    log-level:
+      default: 'info'
+      description: 'fender log verbosity: debug | info | warn | error'
+
+---
+
+# .fender is a hidden job meant to be extended with `extends: .fender`.
+# It installs and starts fender in before_script so that all docker commands
+# in your job's script: section are transparently proxied.
+#
+# Because GitLab CI runners don't persist Docker context state between
+# pipeline stages (each job gets a fresh environment), this component
+# exports DOCKER_HOST so it works reliably regardless of context support.
+.fender:
+  variables:
+    # Overridden in before_script once fender is running.
+    DOCKER_HOST: ''
+    FENDER_SOCKET: ''
+
+  before_script:
+    - |
+      set -euo pipefail
+
+      #── Resolve version ────────────────────────────────────────────────────
+      FENDER_VERSION="${{ inputs.version }}"
+      if [ "$FENDER_VERSION" = "latest" ]; then
+        FENDER_VERSION=$(curl -fsSL \
+          "https://api.github.com/repos/fender-proxy/fender/releases/latest" \
+          | grep '"tag_name"' | cut -d'"' -f4)
+      fi
+
+      #── Detect platform ────────────────────────────────────────────────────
+      OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+      RAW_ARCH=$(uname -m)
+      case "$RAW_ARCH" in
+        x86_64)        ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *)
+          echo "fender: unsupported architecture: $RAW_ARCH"
+          exit 1
+          ;;
+      esac
+
+      #── Download & install ─────────────────────────────────────────────────
+      ARCHIVE="fender_${OS}_${ARCH}.tar.gz"
+      URL="https://github.com/fender-proxy/fender/releases/download/${FENDER_VERSION}/${ARCHIVE}"
+      echo "Installing fender ${FENDER_VERSION} (${OS}/${ARCH})…"
+      curl -fsSL "$URL" | tar -xz -C /usr/local/bin fender
+      chmod +x /usr/local/bin/fender
+
+      #── Write config ───────────────────────────────────────────────────────
+      mkdir -p "$HOME/.fender"
+      CONFIG="$HOME/.fender/config.yaml"
+      : > "$CONFIG"
+
+      DEFAULT_REGISTRY="${{ inputs.default-registry }}"
+      if [ -n "$DEFAULT_REGISTRY" ]; then
+        printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+      fi
+
+      REGISTRY_MAP="${{ inputs.registry-map }}"
+      if [ -n "$REGISTRY_MAP" ]; then
+        echo 'registry_map:' >> "$CONFIG"
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          printf '  %s\n' "$line" >> "$CONFIG"
+        done <<< "$REGISTRY_MAP"
+      fi
+
+      printf 'log_level: "%s"\n' "${{ inputs.log-level }}" >> "$CONFIG"
+
+      #── Start fender ───────────────────────────────────────────────────────
+      FENDER_SOCK="$HOME/.fender/fender.sock"
+      nohup fender > /tmp/fender.log 2>&1 &
+      FENDER_PID=$!
+
+      echo "Waiting for fender (pid=$FENDER_PID)…"
+      for i in $(seq 1 20); do
+        [ -S "$FENDER_SOCK" ] && break
+        if [ "$i" -eq 20 ]; then
+          echo "fender did not start within 10 seconds"
+          cat /tmp/fender.log
+          exit 1
+        fi
+        sleep 0.5
+      done
+      echo "fender ready — socket: $FENDER_SOCK"
+
+      #── Export DOCKER_HOST ─────────────────────────────────────────────────
+      # GitLab CI jobs start in a fresh environment, so we set DOCKER_HOST
+      # explicitly rather than relying on Docker context persistence.
+      export DOCKER_HOST="unix://$FENDER_SOCK"
+      export FENDER_SOCKET="$FENDER_SOCK"
+
+      # Propagate to subsequent script lines in this job.
+      echo "DOCKER_HOST=unix://$FENDER_SOCK" >> /etc/environment 2>/dev/null || true
