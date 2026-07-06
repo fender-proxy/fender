@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.jpg" width="180" alt="fender logo">
+</p>
+
 # fender
 
 **fender** is a transparent Docker Unix socket proxy that frees you from the implicit Docker Hub registry lock-in — without touching Dockerfiles, CI scripts, or CLI habits.
