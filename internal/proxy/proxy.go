@@ -142,9 +142,20 @@ func (p *Proxy) UpstreamSocket() string {
 // In-flight requests on the old socket complete normally; new connections
 // will dial the new socket. Idle connections to the old socket are closed
 // so that connection pool entries don't linger.
+//
+// Self-loop guard: when fender installs itself as the active Docker context,
+// the filesystem watcher resolves fender's own listen socket. This method
+// silently ignores such updates to avoid forwarding requests to ourselves.
 func (p *Proxy) UpdateUpstream(socket string) {
 	old := p.upstream.Socket()
 	if socket == old {
+		return
+	}
+	// Detect circular reference: our own listen socket being set as upstream.
+	if socket == p.cfg.Listen {
+		slog.Debug("ignoring circular upstream reference",
+			"reason", "fender context is the active Docker context",
+		)
 		return
 	}
 	if err := checkUpstream(socket); err != nil {

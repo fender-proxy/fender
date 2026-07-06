@@ -42,23 +42,19 @@ func newRootCmd() *cobra.Command {
 
 It intercepts Docker API calls and rewrites image references that have no
 explicit registry (e.g. nginx:latest, myorg/app:v1) to a registry of your
-choice, freeing you from the implicit Docker Hub dependency without touching
-Dockerfiles, CI scripts, or CLI muscle memory.
+choice, removing the implicit Docker Hub dependency.
 
-Upstream socket auto-detection:
-  Fender automatically reads the active Docker context from ~/.docker/config.json
-  and uses its socket — the same way the Docker CLI does. When you switch
-  contexts with "docker context use", fender follows automatically.
-  Set --upstream explicitly to disable auto-detection and pin a socket.
+On startup fender:
+  • Detects the active Docker context and uses its socket as the upstream
+  • Creates a "fender" Docker context pointing to its own socket
+  • Sets "fender" as the active Docker context
 
-Usage:
-  1. Start fender:
-       fender --default-registry registry.example.com
+On shutdown fender:
+  • Removes the "fender" Docker context
+  • Restores whatever context was active before
 
-  2. Point the Docker CLI at fender's socket:
-       export DOCKER_HOST=unix://$HOME/.fender/fender.sock
-
-  3. Use Docker as normal — fender rewrites and proxies transparently.`,
+This means all Docker tooling (CLI, Compose, etc.) automatically routes
+through fender with no manual DOCKER_HOST configuration required.`,
 		Version: appVersion,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return run(cfgFile, config.Overrides{
@@ -86,27 +82,21 @@ func run(cfgFile string, overrides config.Overrides) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	// Initialise structured logger early so all subsequent messages are formatted.
+	// Initialise structured logger before anything else so all log output
+	// is consistently formatted from the start.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
 	slog.SetDefault(logger)
 
-	// Determine the upstream socket.
-	//
-	// If upstream was explicitly set (via flag, env, or config file), honour it
-	// and skip context watching — the user has opted into manual control.
-	//
-	// Otherwise, auto-detect from the active Docker context and install a
-	// filesystem watcher so fender follows context switches in real time.
+	// ── Upstream resolution ───────────────────────────────────────────────
+	// If upstream was set explicitly (flag / env / config file), use it and
+	// skip context auto-detection. Otherwise resolve from the active context.
 	upstreamExplicit := cfg.Upstream != ""
 	var upstreamSource string
 
 	if upstreamExplicit {
 		upstreamSource = "explicit config"
-		slog.Debug("upstream set explicitly, skipping context auto-detection",
-			"upstream", cfg.Upstream,
-		)
 	} else {
 		sock, src, err := dockerctx.Resolve()
 		if err != nil {
@@ -116,13 +106,48 @@ func run(cfgFile string, overrides config.Overrides) error {
 		upstreamSource = src
 	}
 
-	// Create and start the proxy.
+	// ── Proxy ─────────────────────────────────────────────────────────────
 	p, err := proxy.New(cfg)
 	if err != nil {
 		return fmt.Errorf("initialising proxy: %w", err)
 	}
 
-	// Start the context watcher (only in auto-detect mode).
+	// ── Docker context installation ───────────────────────────────────────
+	// Register fender as a Docker context and make it the active one so all
+	// Docker tooling routes through fender automatically, with no DOCKER_HOST
+	// export needed.
+	prevContext, ctxErr := dockerctx.InstallContext(cfg.Listen)
+	if ctxErr != nil {
+		// Non-fatal: the proxy still works, but the user needs DOCKER_HOST.
+		slog.Warn("could not install fender Docker context — set DOCKER_HOST manually",
+			"err", ctxErr,
+			"DOCKER_HOST", "unix://"+cfg.Listen,
+		)
+	} else {
+		if dockerctx.ContextExists() {
+			slog.Info("fender Docker context installed",
+				"context", dockerctx.FenderContextName,
+				"previous_context", prevContext,
+			)
+		}
+	}
+
+	// Always attempt to clean up the context on exit, even on panic paths.
+	defer func() {
+		if ctxErr != nil {
+			return // nothing to uninstall
+		}
+		slog.Info("removing fender Docker context, restoring previous context",
+			"restoring", prevContext,
+		)
+		if err := dockerctx.UninstallContext(prevContext); err != nil {
+			slog.Warn("could not fully remove fender Docker context", "err", err)
+		}
+	}()
+
+	// ── Context watcher ───────────────────────────────────────────────────
+	// Watch ~/.docker for context changes and update the upstream socket live.
+	// Only active in auto-detect mode (explicit --upstream skips this).
 	var watcher *dockerctx.Watcher
 	if !upstreamExplicit {
 		watcher, err = dockerctx.NewWatcher(cfg.Upstream, func(socket, source string) {
@@ -134,7 +159,6 @@ func run(cfgFile string, overrides config.Overrides) error {
 			p.UpdateUpstream(socket)
 		})
 		if err != nil {
-			// Non-fatal: log and continue without watching
 			slog.Warn("cannot start Docker context watcher — context switches will not be detected",
 				"err", err,
 			)
@@ -144,7 +168,7 @@ func run(cfgFile string, overrides config.Overrides) error {
 		}
 	}
 
-	// Print startup summary.
+	// ── Startup summary ───────────────────────────────────────────────────
 	slog.Info("fender ready",
 		"listen", cfg.Listen,
 		"upstream", cfg.Upstream,
@@ -152,14 +176,18 @@ func run(cfgFile string, overrides config.Overrides) error {
 		"default_registry", cfg.DefaultRegistry,
 		"context_watching", !upstreamExplicit && watcher != nil,
 	)
-	if len(cfg.RegistryMap) > 0 {
-		for src, dst := range cfg.RegistryMap {
-			slog.Info("registry mapping", "from", src, "to", dst)
-		}
+	for src, dst := range cfg.RegistryMap {
+		slog.Info("registry mapping", "from", src, "to", dst)
 	}
-	fmt.Fprintf(os.Stderr, "\nTo use fender, run:\n  export DOCKER_HOST=unix://%s\n\n", cfg.Listen)
 
-	// Block until an OS signal requests shutdown.
+	if ctxErr == nil {
+		fmt.Fprintf(os.Stderr, "\n✓ Docker context %q is now active — no DOCKER_HOST export needed.\n\n",
+			dockerctx.FenderContextName)
+	} else {
+		fmt.Fprintf(os.Stderr, "\nTo use fender, run:\n  export DOCKER_HOST=unix://%s\n\n", cfg.Listen)
+	}
+
+	// ── Serve ─────────────────────────────────────────────────────────────
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
