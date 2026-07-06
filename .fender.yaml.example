@@ -19,15 +19,27 @@ upstream: "/var/run/docker.sock"
 #      myorg/app:v1     → registry.example.com/myorg/app:v1
 #      ghcr.io/org/app  → unchanged (has explicit registry)
 #
+# Can be specified as a string or as an object with credentials:
+# default_registry: "registry.example.com"
+#
+# default_registry:
+#   name: "registry.example.com"
+#   username: "user"
+#   password: "password"
+#
 # Override: --default-registry flag or FENDER_DEFAULT_REGISTRY env var
 default_registry: ""
 
 # Per-registry rewrite map.  Source registry → target registry.
 # Applied after default_registry resolution.
 #
-# Common use-cases:
-#   • Route all docker.io traffic through a pull-through cache
-#   • Redirect ghcr.io to an internal mirror
+# Targets can be specified as a string or as an object with credentials:
+# registry_map:
+#   docker.io:
+#     name: nexus.example.com/dockerhub-proxy
+#     username: "user"
+#     password: "password"
+#   ghcr.io:   nexus.example.com/ghcr-proxy
 #
 # Note: for unqualified images (no explicit registry), "docker.io" is the
 #       implicit source registry Docker would normally use.
@@ -36,6 +48,16 @@ default_registry: ""
 registry_map:
   # docker.io: nexus.example.com/dockerhub-proxy
   # ghcr.io:   nexus.example.com/ghcr-proxy
+
+# Standalone registry authentication configs.
+# Used to automatically authenticate when pulling/pushing.
+# Key is the registry host name.
+auths:
+  # registry.example.com:
+  #   username: "user"
+  #   password: "password"
+  #   email: "user@example.com"
+  #   identitytoken: "token"
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 

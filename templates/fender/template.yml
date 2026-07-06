@@ -38,6 +38,12 @@ spec:
         Newline-separated registry remapping rules in "source: target" format.
         Example: "docker.io: nexus.corp/dockerhub-proxy\nghcr.io: nexus.corp/ghcr-proxy"
 
+    auths:
+      default: ''
+      description: >
+        Newline-separated registry authentication credentials in YAML format.
+        Example: "registry.example.com:\n  username: $REG_USER\n  password: $REG_PASSWORD"
+
     log-level:
       default: 'info'
       description: 'fender log verbosity: debug | info | warn | error'
@@ -89,7 +95,15 @@ spec:
 
       DEFAULT_REGISTRY="$[[ inputs.default-registry ]]"
       if [ -n "$DEFAULT_REGISTRY" ]; then
-        printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+        if [[ "$DEFAULT_REGISTRY" == *$'\n'* ]] || [[ "$DEFAULT_REGISTRY" == *":"* ]]; then
+          echo 'default_registry:' >> "$CONFIG"
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            printf '  %s\n' "$line" >> "$CONFIG"
+          done <<< "$DEFAULT_REGISTRY"
+        else
+          printf 'default_registry: "%s"\n' "$DEFAULT_REGISTRY" >> "$CONFIG"
+        fi
       fi
 
       REGISTRY_MAP="$[[ inputs.registry-map ]]"
@@ -99,6 +113,15 @@ spec:
           [ -z "$line" ] && continue
           printf '  %s\n' "$line" >> "$CONFIG"
         done <<< "$REGISTRY_MAP"
+      fi
+
+      AUTHS="$[[ inputs.auths ]]"
+      if [ -n "$AUTHS" ]; then
+        echo 'auths:' >> "$CONFIG"
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          printf '  %s\n' "$line" >> "$CONFIG"
+        done <<< "$AUTHS"
       fi
 
       printf 'log_level: "%s"\n' "$[[ inputs.log-level ]]" >> "$CONFIG"

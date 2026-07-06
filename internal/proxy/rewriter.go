@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -41,8 +42,14 @@ var imageSuffixes = []string{
 // according to the proxy configuration. The request is modified in-place.
 func rewriteRequest(r *http.Request, cfg *config.Config) {
 	// Short-circuit if no rewriting is configured.
-	if cfg.DefaultRegistry == "" && len(cfg.RegistryMap) == 0 {
+	if cfg.DefaultRegistry.Name == "" && len(cfg.RegistryMap) == 0 {
 		return
+	}
+
+	// Build a string map of registry_map to pass to image.Rewrite
+	regMap := make(map[string]string, len(cfg.RegistryMap))
+	for k, v := range cfg.RegistryMap {
+		regMap[k] = v.Name
 	}
 
 	path := r.URL.Path
@@ -50,24 +57,24 @@ func rewriteRequest(r *http.Request, cfg *config.Config) {
 	switch {
 	// POST /containers/create — image name is in the JSON request body.
 	case r.Method == http.MethodPost && reContainersCreate.MatchString(path):
-		if err := rewriteContainersCreate(r, cfg); err != nil {
+		if err := rewriteContainersCreate(r, cfg, regMap); err != nil {
 			slog.Warn("containers/create body rewrite failed", "err", err)
 		}
 
 	// POST /images/create — image name is in the `fromImage` query parameter.
 	case r.Method == http.MethodPost && reImagesCreate.MatchString(path):
-		rewriteImagesCreate(r, cfg)
+		rewriteImagesCreate(r, cfg, regMap)
 
 	// GET|DELETE|POST /images/{name}[/suffix] — image name is in the URL path.
 	// Exclude /images/create which is handled above.
 	case reImagePath.MatchString(path) && !reImagesCreate.MatchString(path):
-		rewriteImageInPath(r, cfg)
+		rewriteImageInPath(r, cfg, regMap)
 	}
 }
 
 // rewriteContainersCreate rewrites the "Image" field inside the JSON body of
 // a POST /containers/create request.
-func rewriteContainersCreate(r *http.Request, cfg *config.Config) error {
+func rewriteContainersCreate(r *http.Request, cfg *config.Config, regMap map[string]string) error {
 	if r.Body == nil {
 		return nil
 	}
@@ -92,7 +99,7 @@ func rewriteContainersCreate(r *http.Request, cfg *config.Config) error {
 		var imgName string
 		if err := json.Unmarshal(raw, &imgName); err == nil && imgName != "" {
 			slog.Debug("containers/create Image received", "value", imgName)
-			rewritten := image.Rewrite(imgName, cfg.DefaultRegistry, cfg.RegistryMap)
+			rewritten := image.Rewrite(imgName, cfg.DefaultRegistry.Name, regMap)
 			if rewritten != imgName {
 				slog.Debug("rewriting Image in containers/create",
 					"original", imgName,
@@ -117,7 +124,7 @@ func rewriteContainersCreate(r *http.Request, cfg *config.Config) error {
 
 // rewriteImagesCreate rewrites the `fromImage` query parameter of a
 // POST /images/create request (i.e. `docker pull`).
-func rewriteImagesCreate(r *http.Request, cfg *config.Config) {
+func rewriteImagesCreate(r *http.Request, cfg *config.Config, regMap map[string]string) {
 	q := r.URL.Query()
 	fromImage := q.Get("fromImage")
 	if fromImage == "" {
@@ -126,7 +133,12 @@ func rewriteImagesCreate(r *http.Request, cfg *config.Config) {
 
 	slog.Debug("images/create fromImage received", "value", fromImage)
 
-	rewritten := image.Rewrite(fromImage, cfg.DefaultRegistry, cfg.RegistryMap)
+	origHost := image.GetRegistryHost(fromImage)
+	rewritten := image.Rewrite(fromImage, cfg.DefaultRegistry.Name, regMap)
+
+	newHost := image.GetRegistryHost(rewritten)
+	updateAuthHeader(r, origHost, newHost, cfg)
+
 	if rewritten == fromImage {
 		slog.Debug("images/create fromImage unchanged", "value", fromImage)
 		return
@@ -146,7 +158,7 @@ func rewriteImagesCreate(r *http.Request, cfg *config.Config) {
 //	GET  /v1.41/images/nginx:latest/json
 //	POST /v1.41/images/myorg/app:v1/push
 //	DELETE /v1.41/images/ghcr.io/org/app:v1
-func rewriteImageInPath(r *http.Request, cfg *config.Config) {
+func rewriteImageInPath(r *http.Request, cfg *config.Config, regMap map[string]string) {
 	m := reImagePath.FindStringSubmatch(r.URL.Path)
 	if m == nil {
 		return
@@ -172,7 +184,12 @@ func rewriteImageInPath(r *http.Request, cfg *config.Config) {
 		decoded = imgName
 	}
 
-	rewritten := image.Rewrite(decoded, cfg.DefaultRegistry, cfg.RegistryMap)
+	origHost := image.GetRegistryHost(decoded)
+	rewritten := image.Rewrite(decoded, cfg.DefaultRegistry.Name, regMap)
+
+	newHost := image.GetRegistryHost(rewritten)
+	updateAuthHeader(r, origHost, newHost, cfg)
+
 	if rewritten == decoded {
 		return
 	}
@@ -187,3 +204,38 @@ func rewriteImageInPath(r *http.Request, cfg *config.Config) {
 	r.URL.Path = prefix + rewritten + suffix
 	r.URL.RawPath = "" // clear so net/http uses the decoded Path
 }
+
+// updateAuthHeader updates or deletes the X-Registry-Auth header depending on
+// target registry credentials.
+func updateAuthHeader(r *http.Request, origHost, newHost string, cfg *config.Config) {
+	if auth, ok := cfg.GetAuthConfig(newHost); ok {
+		if auth.ServerAddress == "" {
+			auth.ServerAddress = newHost
+		}
+		encoded := encodeAuthHeader(auth)
+		if encoded != "" {
+			slog.Debug("injecting registry credentials", "host", newHost)
+			r.Header.Set("X-Registry-Auth", encoded)
+			return
+		}
+	}
+
+	// If no credentials are found and the registry host has changed, remove
+	// the header to avoid leaking old credentials or failing due to mismatch.
+	if origHost != newHost {
+		if r.Header.Get("X-Registry-Auth") != "" {
+			slog.Debug("removing X-Registry-Auth header for rewritten host", "old_host", origHost, "new_host", newHost)
+			r.Header.Del("X-Registry-Auth")
+		}
+	}
+}
+
+// encodeAuthHeader JSON-marshals and base64-encodes the AuthConfig for Docker daemon ingestion.
+func encodeAuthHeader(auth config.AuthConfig) string {
+	b, err := json.Marshal(auth)
+	if err != nil {
+		return ""
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+

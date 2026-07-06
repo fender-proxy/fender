@@ -110,3 +110,57 @@ func applyMap(ref string, m map[string]string) string {
 	}
 	return ref
 }
+
+// GetRegistryHost extracts the registry host (and port if present) from a registry address or image reference.
+// It handles schemes like http:// and https:// and strips them.
+func GetRegistryHost(ref string) string {
+	if ref == "" {
+		return "docker.io"
+	}
+
+	// Strip scheme if present
+	if strings.HasPrefix(ref, "https://") {
+		ref = ref[len("https://"):]
+	} else if strings.HasPrefix(ref, "http://") {
+		ref = ref[len("http://"):]
+	}
+
+	// Strip digest or tag (if it's not part of the registry port)
+	name := ref
+	if idx := strings.Index(name, "@"); idx != -1 {
+		name = name[:idx]
+	}
+
+	i := strings.Index(name, "/")
+	if i == -1 {
+		// No slash. Is it a registry host, or a bare image name?
+		if strings.Contains(name, ".") || name == "localhost" {
+			return name
+		}
+		if idx := strings.Index(name, ":"); idx != -1 {
+			portOrTag := name[idx+1:]
+			isPort := true
+			for _, r := range portOrTag {
+				if r < '0' || r > '9' {
+					isPort = false
+					break
+				}
+			}
+			if isPort && len(portOrTag) > 0 {
+				return name
+			}
+			before := name[:idx]
+			if before == "localhost" || strings.Contains(before, ".") {
+				return before
+			}
+		}
+		return "docker.io"
+	}
+
+	first := name[:i]
+	if strings.ContainsAny(first, ".:") || first == "localhost" {
+		return first
+	}
+	return "docker.io"
+}
+

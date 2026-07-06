@@ -7,7 +7,45 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/fender-proxy/fender/internal/image"
 )
+
+// RegistryConfig holds a registry target and optional authentication details.
+type RegistryConfig struct {
+	Name          string `yaml:"name"`
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	Email         string `yaml:"email"`
+	IdentityToken string `yaml:"identitytoken"`
+}
+
+// UnmarshalYAML implements custom unmarshaling to support both a simple string
+// or a full object for default_registry / registry_map targets.
+func (r *RegistryConfig) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err == nil {
+		r.Name = s
+		return nil
+	}
+
+	type alias RegistryConfig
+	var a alias
+	if err := value.Decode(&a); err != nil {
+		return err
+	}
+	*r = RegistryConfig(a)
+	return nil
+}
+
+// AuthConfig holds credentials for a registry.
+type AuthConfig struct {
+	Username      string `yaml:"username" json:"username,omitempty"`
+	Password      string `yaml:"password" json:"password,omitempty"`
+	Email         string `yaml:"email" json:"email,omitempty"`
+	IdentityToken string `yaml:"identitytoken" json:"identitytoken,omitempty"`
+	ServerAddress string `yaml:"serveraddress" json:"serveraddress,omitempty"`
+}
 
 // Config holds all fender configuration values.
 type Config struct {
@@ -18,17 +56,21 @@ type Config struct {
 	Upstream string `yaml:"upstream"`
 
 	// DefaultRegistry is prepended to image references that have no explicit registry.
-	// Example: "registry.example.com"
-	// nginx:latest → registry.example.com/nginx:latest
-	DefaultRegistry string `yaml:"default_registry"`
+	DefaultRegistry RegistryConfig `yaml:"default_registry"`
 
 	// RegistryMap replaces specific source registries with target registries.
-	// Example: {"docker.io": "nexus.corp/dockerhub-proxy", "ghcr.io": "nexus.corp/ghcr-proxy"}
-	RegistryMap map[string]string `yaml:"registry_map"`
+	RegistryMap map[string]RegistryConfig `yaml:"registry_map"`
+
+	// Auths holds credentials for any registries.
+	Auths map[string]AuthConfig `yaml:"auths"`
 
 	// LogLevel controls verbosity: debug | info | warn | error
 	LogLevel string `yaml:"log_level"`
+
+	// registryAuths is built at load time for O(1) auth configuration lookup.
+	registryAuths map[string]AuthConfig
 }
+
 
 // Overrides holds values sourced from CLI flags.
 // An empty string means the flag was not provided.
@@ -75,6 +117,8 @@ func Load(cfgFile string, overrides Overrides) (*Config, error) {
 	applyEnv(&cfg)
 	applyOverrides(&cfg, overrides)
 
+	cfg.buildRegistryAuths()
+
 	// Expand leading ~ in socket path
 	cfg.Listen = expandHome(cfg.Listen)
 
@@ -113,7 +157,7 @@ func applyEnv(cfg *Config) {
 		cfg.Upstream = v
 	}
 	if v := os.Getenv("FENDER_DEFAULT_REGISTRY"); v != "" {
-		cfg.DefaultRegistry = v
+		cfg.DefaultRegistry = RegistryConfig{Name: v}
 	}
 	if v := os.Getenv("FENDER_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
@@ -129,12 +173,68 @@ func applyOverrides(cfg *Config, o Overrides) {
 		cfg.Upstream = o.Upstream
 	}
 	if o.DefaultRegistry != "" {
-		cfg.DefaultRegistry = o.DefaultRegistry
+		cfg.DefaultRegistry = RegistryConfig{Name: o.DefaultRegistry}
 	}
 	if o.LogLevel != "" {
 		cfg.LogLevel = o.LogLevel
 	}
 }
+
+// buildRegistryAuths compiles all defined auth configurations into a single lookup map.
+func (c *Config) buildRegistryAuths() {
+	c.registryAuths = make(map[string]AuthConfig)
+
+	// 1. Populate from Auths map
+	for host, auth := range c.Auths {
+		c.registryAuths[image.GetRegistryHost(host)] = auth
+	}
+
+	// 2. Populate from DefaultRegistry if it has auth
+	if c.DefaultRegistry.Name != "" && hasAuth(c.DefaultRegistry) {
+		host := image.GetRegistryHost(c.DefaultRegistry.Name)
+		c.registryAuths[host] = AuthConfig{
+			Username:      c.DefaultRegistry.Username,
+			Password:      c.DefaultRegistry.Password,
+			Email:         c.DefaultRegistry.Email,
+			IdentityToken: c.DefaultRegistry.IdentityToken,
+		}
+	}
+
+	// 3. Populate from RegistryMap if any mapping has auth
+	for _, mapping := range c.RegistryMap {
+		if mapping.Name != "" && hasAuth(mapping) {
+			host := image.GetRegistryHost(mapping.Name)
+			c.registryAuths[host] = AuthConfig{
+				Username:      mapping.Username,
+				Password:      mapping.Password,
+				Email:         mapping.Email,
+				IdentityToken: mapping.IdentityToken,
+			}
+		}
+	}
+}
+
+func hasAuth(r RegistryConfig) bool {
+	return r.Username != "" || r.Password != "" || r.IdentityToken != ""
+}
+
+// GetAuthConfig returns the AuthConfig for a given registry host (e.g. "registry.example.com").
+// It handles index.docker.io / docker.io equivalence automatically.
+func (c *Config) GetAuthConfig(host string) (AuthConfig, bool) {
+	if c.registryAuths == nil {
+		return AuthConfig{}, false
+	}
+	auth, ok := c.registryAuths[host]
+	if !ok {
+		if host == "docker.io" {
+			auth, ok = c.registryAuths["index.docker.io"]
+		} else if host == "index.docker.io" {
+			auth, ok = c.registryAuths["docker.io"]
+		}
+	}
+	return auth, ok
+}
+
 
 // expandHome replaces a leading "~/" with the user's home directory.
 func expandHome(path string) string {

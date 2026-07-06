@@ -173,12 +173,13 @@ func run(cfgFile string, overrides config.Overrides) error {
 		"listen", cfg.Listen,
 		"upstream", cfg.Upstream,
 		"upstream_source", upstreamSource,
-		"default_registry", cfg.DefaultRegistry,
+		"default_registry", cfg.DefaultRegistry.Name,
 		"context_watching", !upstreamExplicit && watcher != nil,
 	)
 	for src, dst := range cfg.RegistryMap {
-		slog.Info("registry mapping", "from", src, "to", dst)
+		slog.Info("registry mapping", "from", src, "to", dst.Name)
 	}
+
 
 	if ctxErr == nil {
 		fmt.Fprintf(os.Stderr, "\n✓ Docker context %q is now active — no DOCKER_HOST export needed.\n\n",
