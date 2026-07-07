@@ -2,8 +2,10 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -78,6 +80,11 @@ func New(cfg *config.Config) (*Proxy, error) {
 		return nil, err
 	}
 
+	// Load the embedded fender-frontend:local image into the daemon if missing.
+	if err := loadEmbeddedImage(cfg.Upstream); err != nil {
+		slog.Warn("failed to load embedded fender-frontend image", "err", err)
+	}
+
 	upstream := newDynamicUpstream(cfg.Upstream)
 
 	// Transport that dials the upstream Docker daemon over its Unix socket.
@@ -88,7 +95,11 @@ func New(cfg *config.Config) (*Proxy, error) {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			sock := upstream.Socket()
-			return (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "unix", sock)
+			conn, err := (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, "unix", sock)
+			if err != nil {
+				return nil, err
+			}
+			return newInterceptConn(conn, cfg), nil
 		},
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
@@ -202,3 +213,49 @@ func checkUpstream(socketPath string) error {
 	_ = conn.Close()
 	return nil
 }
+
+// loadEmbeddedImage queries the Docker daemon to check if fender-frontend:local
+// is present. If it is not, it uploads the embedded tarball via POST /images/load.
+func loadEmbeddedImage(upstreamSocket string) error {
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", upstreamSocket)
+			},
+		},
+	}
+
+	// 1. Check if the image exists
+	resp, err := client.Get("http://docker/images/fender-frontend:local/json")
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			slog.Debug("fender-frontend:local image already present in daemon")
+			return nil
+		}
+	}
+
+	slog.Info("loading embedded fender-frontend:local image into daemon...")
+
+	// 2. Load the image from embedded bytes
+	req, err := http.NewRequest(http.MethodPost, "http://docker/images/load", bytes.NewReader(FenderFrontendTar))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("loading image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to load image, status: %s, body: %s", resp.Status, string(body))
+	}
+
+	slog.Info("successfully loaded fender-frontend:local image")
+	return nil
+}
+
