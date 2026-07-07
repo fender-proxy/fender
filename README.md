@@ -341,9 +341,10 @@ registry_map:
 | `POST /v*/images/{name}/push` | `{name}` path segment |
 | `GET /v*/images/{name}/history` | `{name}` path segment |
 | `POST /v*/images/{name}/tag` | `{name}` path segment |
+| `/moby.buildkit.v1.Control/Solve` | BuildKit `SolveRequest` frontend source and options (`docker build`) |
 | Everything else | Pass-through, byte-for-byte (streaming preserved) |
 
-> **`docker build` and `FROM` lines:** `FROM` directives in a Dockerfile are processed by the Docker daemon internally — not via an API call fender can intercept. To redirect build base images, use fully-qualified image names in your Dockerfiles (`FROM registry.example.com/library/ubuntu:22.04`). Build-context rewriting is planned for a future release.
+> **`docker build` and `FROM` lines:** `FROM` directives in a Dockerfile are fully intercepted and rewritten, even when using BuildKit (`DOCKER_BUILDKIT=1`). This works transparently by intercepting the gRPC `Solve` API call and injecting a custom, embedded BuildKit gateway frontend (`fender-frontend:local`) that rewrites base image references in the Dockerfile before invoking the standard compiler.
 
 ---
 
