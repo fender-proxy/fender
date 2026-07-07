@@ -359,15 +359,17 @@ registry_map:
 │     (stores PreviousContext for crash recovery)               │
 │  4. Set currentContext = "fender" in ~/.docker/config.json    │
 │  5. Start fsnotify watcher on ~/.docker/                      │
+│  6. Load embedded fender-frontend:local image into daemon     │
 └──────────────────────────────────────────────────────────────┘
          │  all Docker tooling now routes here
          ▼
 ┌──────────────────────────────────────────────────────────────┐
 │  Per request                                                  │
-│  POST /containers/create  → rewrite Image field in JSON body  │
-│  POST /images/create      → rewrite fromImage query param     │
-│  /images/{name}/…         → rewrite name in URL path          │
-│  everything else          → pass-through                      │
+│  POST /containers/create   → rewrite Image field in JSON body │
+│  POST /images/create       → rewrite fromImage query param    │
+│  /images/{name}/…          → rewrite name in URL path         │
+│  /Control/Solve (gRPC)     → inject fender-frontend           │
+│  everything else           → pass-through                     │
 └──────────────────────────────────────────────────────────────┘
          │
          ▼  dynamically updated upstream socket
