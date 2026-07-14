@@ -1,0 +1,114 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e:
+    name: Act End-to-End Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build local fender
+        run: |
+          go build -o $RUNNER_TEMP/fender .
+          echo "$RUNNER_TEMP" >> $GITHUB_PATH
+
+      - name: Start local registry
+        run: |
+          docker rm -f registry || true
+          docker run -d -p 5000:5000 --name registry registry:2
+          # Wait for registry to be ready
+          for i in {1..50}; do
+            curl -s http://localhost:5000/v2/ && break
+            sleep 0.1
+          done
+
+      - name: Push test image to local registry
+        run: |
+          # Pull a small public image to use as test subject
+          docker pull hello-world
+          # Depending on the Docker CLI/Daemon version, it might send 'hello-world'
+          # or the fully qualified 'docker.io/library/hello-world'.
+          # We tag and push both forms to the local registry so the pull succeeds either way.
+          docker tag hello-world localhost:5000/library/hello-world:latest
+          docker push localhost:5000/library/hello-world:latest
+          
+          docker tag hello-world localhost:5000/hello-world:latest
+          docker push localhost:5000/hello-world:latest
+          # Remove local images to ensure a fresh pull
+          docker rmi hello-world localhost:5000/library/hello-world:latest localhost:5000/hello-world:latest || true
+
+      - name: Configure and start fender
+        run: |
+          mkdir -p "$HOME/.fender"
+          cat > "$HOME/.fender/config.yaml" <<'EOF'
+          default_registry: "localhost:5000"
+          log_level: "debug"
+          EOF
+
+          nohup fender > "$RUNNER_TEMP/fender.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/fender.pid"
+
+          for i in $(seq 1 20); do
+            [ -S "$HOME/.fender/fender.sock" ] && break
+            [ "$i" -eq 20 ] && {
+              echo "fender failed to start within 10 s"
+              cat "$RUNNER_TEMP/fender.log"
+              exit 1
+            }
+            sleep 0.5
+          done
+
+          echo "fender pid=$(cat $RUNNER_TEMP/fender.pid) — ready"
+
+      - name: Verify image pull via fender
+        run: |
+          # The pull should succeed, pulling from localhost:5000/library/hello-world
+          docker pull hello-world
+
+          echo "=== fender log ==="
+          cat "$RUNNER_TEMP/fender.log"
+
+          # Verify that fender rewrote the reference to our local registry
+          if grep -qE "localhost:5000/(library/)?hello-world" "$RUNNER_TEMP/fender.log"; then
+            echo "✓ image reference was rewritten by fender"
+          else
+            echo "✗ expected rewrite not found in fender log"
+            exit 1
+          fi
+
+      - name: Clean up and restore context
+        if: always()
+        run: |
+          PREV=$(docker context inspect fender \
+            --format '{{ index .Metadata "PreviousContext" }}' 2>/dev/null || echo "default")
+
+          if [ -f "$RUNNER_TEMP/fender.pid" ]; then
+            PID=$(cat "$RUNNER_TEMP/fender.pid")
+            kill "$PID" 2>/dev/null || true
+            for i in {1..20}; do
+              kill -0 "$PID" 2>/dev/null || break
+              sleep 0.1
+            done
+          fi
+          ACTIVE=$(docker context show)
+          if [ "$ACTIVE" != "$PREV" ] && [ "$ACTIVE" != "default" ]; then
+            docker context use "$PREV" || true
+          fi
+
+      - name: Upload fender log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fender-e2e-log
+          path: ${{ runner.temp }}/fender.log

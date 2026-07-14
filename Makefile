@@ -28,6 +28,11 @@ run:
 test:
 	go test -v ./...
 
+## test-e2e: run the end-to-end test locally using 'act'
+test-e2e:
+	@command -v act >/dev/null 2>&1 || { echo >&2 "Error: 'act' is not installed. Please install it from https://github.com/nektos/act"; exit 1; }
+	act -W .github/workflows/e2e.yml --container-daemon-socket unix:///var/run/docker.sock
+
 ## clean: remove build artefacts
 clean:
 	rm -rf $(BIN_DIR)
