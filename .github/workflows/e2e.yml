@@ -37,11 +37,16 @@ jobs:
         run: |
           # Pull a small public image to use as test subject
           docker pull hello-world
-          # Tag and push it to the local registry, under library/ namespace
+          # Depending on the Docker CLI/Daemon version, it might send 'hello-world'
+          # or the fully qualified 'docker.io/library/hello-world'.
+          # We tag and push both forms to the local registry so the pull succeeds either way.
           docker tag hello-world localhost:5000/library/hello-world:latest
           docker push localhost:5000/library/hello-world:latest
+          
+          docker tag hello-world localhost:5000/hello-world:latest
+          docker push localhost:5000/hello-world:latest
           # Remove local images to ensure a fresh pull
-          docker rmi hello-world localhost:5000/library/hello-world:latest
+          docker rmi hello-world localhost:5000/library/hello-world:latest localhost:5000/hello-world:latest || true
 
       - name: Configure and start fender
         run: |
@@ -75,7 +80,7 @@ jobs:
           cat "$RUNNER_TEMP/fender.log"
 
           # Verify that fender rewrote the reference to our local registry
-          if grep -q "localhost:5000/library/hello-world" "$RUNNER_TEMP/fender.log"; then
+          if grep -qE "localhost:5000/(library/)?hello-world" "$RUNNER_TEMP/fender.log"; then
             echo "✓ image reference was rewritten by fender"
           else
             echo "✗ expected rewrite not found in fender log"
