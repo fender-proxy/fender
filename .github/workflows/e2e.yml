@@ -28,9 +28,9 @@ jobs:
           docker rm -f registry || true
           docker run -d -p 5000:5000 --name registry registry:2
           # Wait for registry to be ready
-          for i in {1..10}; do
+          for i in {1..50}; do
             curl -s http://localhost:5000/v2/ && break
-            sleep 1
+            sleep 0.1
           done
 
       - name: Push test image to local registry
