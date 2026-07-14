@@ -93,9 +93,14 @@ jobs:
           PREV=$(docker context inspect fender \
             --format '{{ index .Metadata "PreviousContext" }}' 2>/dev/null || echo "default")
 
-          kill "$(cat "$RUNNER_TEMP/fender.pid")" 2>/dev/null || true
-          sleep 1
-
+          if [ -f "$RUNNER_TEMP/fender.pid" ]; then
+            PID=$(cat "$RUNNER_TEMP/fender.pid")
+            kill "$PID" 2>/dev/null || true
+            for i in {1..20}; do
+              kill -0 "$PID" 2>/dev/null || break
+              sleep 0.1
+            done
+          fi
           ACTIVE=$(docker context show)
           if [ "$ACTIVE" != "$PREV" ] && [ "$ACTIVE" != "default" ]; then
             docker context use "$PREV" || true
