@@ -68,7 +68,7 @@ jobs:
             }
             sleep 0.5
           done
-          sleep 0.2   # let context registration finish
+
           echo "fender pid=$(cat $RUNNER_TEMP/fender.pid) — ready"
 
       - name: Verify image pull via fender
