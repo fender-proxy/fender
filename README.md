@@ -25,6 +25,16 @@ docker pull nginx:latest       # you type this
 
 ---
 
+## Why fender?
+
+* **Bypass Docker Hub Rate Limits (`429 Too Many Requests`)**: Seamlessly route pulls through an internal mirror (Harbor, Sonatype Nexus, JFrog Artifactory, AWS ECR pull-through cache, GCP Artifact Registry, GitLab Dependency Proxy) in CI/CD without rewriting existing Dockerfiles or pipeline scripts.
+* **No `daemon.json` or root access required**: Docker's native `registry-mirrors` requires modifying `/etc/docker/daemon.json` and restarting `dockerd`—impossible on GitHub-hosted runners or locked-down environments. `fender` runs purely in user space by registering an ephemeral Docker context.
+* **Mirrors any registry, not just Docker Hub**: Unlike Docker's built-in mirror feature (which only supports `docker.io`), `fender` rewrites arbitrary registries like `ghcr.io` or `quay.io` via `registry_map`.
+* **Zero changes to legacy codebases**: Developers keep typing `docker pull nginx` or writing `FROM python:3.11-slim`. No need to mass-edit hundreds of repositories across teams.
+* **Transparent BuildKit support**: Intercepts `docker build` (`DOCKER_BUILDKIT=1`) gRPC `Solve` calls with an embedded frontend gateway to rewrite `FROM` statements on the fly.
+
+---
+
 ## GitHub Actions
 
 ```yaml

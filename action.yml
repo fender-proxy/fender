@@ -1,7 +1,7 @@
 name: 'fender-ci'
 description: >
-  Transparent Docker registry proxy. Rewrites unqualified image references
-  to any registry with a single action step.
+  Transparent Docker registry proxy. Bypass Docker Hub rate limits and redirect
+  image pulls, runs, and builds to any mirror or pull-through cache without modifying Dockerfiles.
 
 author: 'fender-proxy'
 
