@@ -170,13 +170,13 @@ runs:
         # Context registration happens immediately after, so by the time the next
         # step runs, "docker context use fender" has already been set.
         echo "Waiting for fender to start…"
-        for i in $(seq 1 20); do
-          if [ -S "$SOCKET" ]; then
-            echo "✓ fender ready (pid=$(cat "$PID_FILE"), socket=$SOCKET)"
+        for i in $(seq 1 30); do
+          if [ -S "$SOCKET" ] && [ "$(docker context show 2>/dev/null || true)" = "fender" ]; then
+            echo "✓ fender ready and context active (pid=$(cat "$PID_FILE"), socket=$SOCKET)"
             break
           fi
-          if [ "$i" -eq 20 ]; then
-            echo "::error::fender did not start within 10 seconds"
+          if [ "$i" -eq 30 ]; then
+            echo "::error::fender did not start or activate context within 15 seconds"
             echo "::group::fender startup log"
             cat "$LOG" || true
             echo "::endgroup::"
@@ -184,10 +184,6 @@ runs:
           fi
           sleep 0.5
         done
-
-        # Give the context registration a moment to complete (it happens
-        # immediately after the socket is created, but asynchronously).
-        sleep 0.2
 
         echo "socket=$SOCKET"           >> "$GITHUB_OUTPUT"
         echo "FENDER_SOCKET=$SOCKET"    >> "$GITHUB_ENV"

@@ -63,10 +63,12 @@ jobs:
           nohup fender > "$RUNNER_TEMP/fender.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/fender.pid"
 
-          for i in $(seq 1 20); do
-            [ -S "$HOME/.fender/fender.sock" ] && break
-            [ "$i" -eq 20 ] && {
-              echo "fender failed to start within 10 s"
+          for i in $(seq 1 30); do
+            if [ -S "$HOME/.fender/fender.sock" ] && [ "$(docker context show 2>/dev/null || true)" = "fender" ]; then
+              break
+            fi
+            [ "$i" -eq 30 ] && {
+              echo "fender failed to start or activate context within 15 s"
               cat "$RUNNER_TEMP/fender.log"
               exit 1
             }
